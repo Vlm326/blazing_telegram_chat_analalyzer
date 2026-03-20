@@ -10,3 +10,8 @@
 # Environment files
 .env
 .env.*
+
+# Local project artifacts
+.vscode/
+result.json
+top_*.txt

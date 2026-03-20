@@ -136,6 +136,12 @@ struct Reaction {
     extra: HashMap<String, Value>,
 }
 
+struct PersonReactionStats {
+    name: String,
+    total: u64,
+    reactions: Vec<(String, u64)>,
+}
+
 fn message_text_len(text: &MessageText) -> usize {
     match text {
         MessageText::Empty => 0,
@@ -174,22 +180,37 @@ fn top_reactions(messages: &[ChatMessage]) -> Vec<(String, u64)> {
     reaction_totals
 }
 
-fn top_people_by_reactions(messages: &[ChatMessage]) -> Vec<(String, u64)> {
-    let mut totals = HashMap::new();
+fn top_people_by_reactions(messages: &[ChatMessage]) -> Vec<PersonReactionStats> {
+    let mut totals: HashMap<String, (u64, HashMap<String, u64>)> = HashMap::new();
 
     for message in messages {
-        let message_reactions: u64 = message
-            .reactions
-            .iter()
-            .map(|reaction| reaction.count as u64)
-            .sum();
-        if message_reactions > 0 {
-            *totals.entry(author_name(message)).or_insert(0_u64) += message_reactions;
+        if !message.reactions.is_empty() {
+            let entry = totals
+                .entry(author_name(message))
+                .or_insert_with(|| (0_u64, HashMap::new()));
+
+            for reaction in &message.reactions {
+                let count = reaction.count as u64;
+                entry.0 += count;
+                *entry.1.entry(reaction.emoji.clone()).or_insert(0_u64) += count;
+            }
         }
     }
 
-    let mut totals: Vec<_> = totals.into_iter().collect();
-    totals.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    let mut totals: Vec<_> = totals
+        .into_iter()
+        .map(|(name, (total, reactions))| {
+            let mut reactions: Vec<_> = reactions.into_iter().collect();
+            reactions.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+
+            PersonReactionStats {
+                name,
+                total,
+                reactions,
+            }
+        })
+        .collect();
+    totals.sort_by(|a, b| b.total.cmp(&a.total).then_with(|| a.name.cmp(&b.name)));
     totals
 }
 
@@ -238,6 +259,35 @@ fn write_stats_file<T: std::fmt::Display>(
     fs::write(file_path, output)
 }
 
+fn write_people_reactions_file(
+    file_path: &str,
+    header: &str,
+    rows: &[PersonReactionStats],
+) -> io::Result<()> {
+    let mut output = String::new();
+    output.push_str(header);
+    output.push('\n');
+
+    for (index, row) in rows.iter().enumerate() {
+        let reactions = row
+            .reactions
+            .iter()
+            .map(|(emoji, count)| format!("{}: {}", emoji, count))
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        output.push_str(&format!(
+            "{}. {}: {} [{}]\n",
+            index + 1,
+            row.name,
+            row.total,
+            reactions
+        ));
+    }
+
+    fs::write(file_path, output)
+}
+
 fn write_all_stats(messages: &[ChatMessage], input_path: &str) -> io::Result<()> {
     let base_dir = Path::new(input_path)
         .parent()
@@ -249,7 +299,7 @@ fn write_all_stats(messages: &[ChatMessage], input_path: &str) -> io::Result<()>
         "Top reactions",
         &top_reactions(messages),
     )?;
-    write_stats_file(
+    write_people_reactions_file(
         &base_dir
             .join("top_people_by_reactions.txt")
             .to_string_lossy(),
